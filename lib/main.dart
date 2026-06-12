@@ -1092,7 +1092,7 @@ class _TelaConfigurarWiFiState extends State<TelaConfigurarWiFi> {
 
       if (wifiCharacteristic != null) {
         // 3. Monta os dados (aqui estou usando JSON, mas pode ser uma string separada por vírgula)
-        String dadosWifi = jsonEncode({"ssid": ssid, "senha": senha});
+        String dadosWifi = "$ssid,$senha";
         
         // 4. Escreve na característica do ESP32
         await wifiCharacteristic.write(utf8.encode(dadosWifi));
