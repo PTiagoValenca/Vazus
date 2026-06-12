@@ -929,22 +929,37 @@ class _TelaAdicionarDispositivoState extends State<TelaAdicionarDispositivo> {
               child: _resultadosScan.isEmpty
                   ? Center(child: Text(_buscando ? 'Buscando sinais Bluetooth...' : 'Nenhum hardware Bluetooth listado.', style: const TextStyle(color: Colors.grey)))
                   : ListView.builder(
-                      itemCount: _resultadosScan.length,
-                      itemBuilder: (context, index) {
-                        final r = _resultadosScan[index];
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.bluetooth),
-                            title: Text(r.device.platformName),
-                            subtitle: Text(r.device.remoteId.str),
-                            trailing: ElevatedButton(
-                              onPressed: () {},
-                              child: const Text('Conectar'),
-                            ),
+                    itemCount: _resultadosScan.length,
+                    itemBuilder: (context, index) {
+                      final r = _resultadosScan[index];
+                      return Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.bluetooth),
+                          title: Text(r.device.platformName.isNotEmpty ? r.device.platformName : 'Dispositivo Desconhecido'),
+                          subtitle: Text(r.device.remoteId.str),
+                          trailing: ElevatedButton(
+                            onPressed: () async {
+                              // 1. Para o scan antes de tentar conectar                                await FlutterBluePlus.stopScan();
+                              
+                              if (!context.mounted) return;
+                               // 2. Navega para a tela de configuração de Wi-Fi
+                              bool? configuradoComSucesso = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => TelaConfigurarWiFi(dispositivo: r.device),
+                                ),
+                              );
+                               // 3. Se a configuração deu certo, fecha a tela de busca e volta pro Dashboard
+                              if (configuradoComSucesso == true && context.mounted) {
+                                Navigator.pop(context, true);
+                              }
+                            },
+                            child: const Text('Conectar'),
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
+                  )
             ),
           ],
         ),
@@ -997,6 +1012,192 @@ class TelaPerfil extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+// ============================================================================
+// TELA CONFIGURAR WI-FI DO ESP32
+// ============================================================================
+class TelaConfigurarWiFi extends StatefulWidget {
+  final BluetoothDevice dispositivo;
+
+  const TelaConfigurarWiFi({super.key, required this.dispositivo});
+
+  @override
+  State<TelaConfigurarWiFi> createState() => _TelaConfigurarWiFiState();
+}
+
+class _TelaConfigurarWiFiState extends State<TelaConfigurarWiFi> {
+  final TextEditingController _ssidController = TextEditingController();
+  final TextEditingController _senhaController = TextEditingController();
+  bool _conectando = false;
+  bool _enviando = false;
+
+  // UUIDs que DEVEM ser os mesmos programados no ESP32
+  final String _serviceUuid = "4faac601-1b4a-11e7-b060-0002a5d5c51b"; // Substitua pelo seu
+  final String _characteristicUuid = "bea5a097-1b4a-11e7-b060-0002a5d5c51b"; // Substitua pelo seu
+
+  @override
+  void initState() {
+    super.initState();
+    _conectarAoDispositivo();
+  }
+
+  Future<void> _conectarAoDispositivo() async {
+    setState(() => _conectando = true);
+    try {
+      // Conecta ao ESP32
+      await widget.dispositivo.connect(timeout: const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint("Erro ao conectar: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Falha ao conectar ao dispositivo.'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _conectando = false);
+    }
+  }
+
+  Future<void> _enviarCredenciais() async {
+    String ssid = _ssidController.text.trim();
+    String senha = _senhaController.text.trim();
+
+    if (ssid.isEmpty || senha.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Preencha o nome da rede e a senha.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() => _enviando = true);
+
+    try {
+      // 1. Descobre os serviços do ESP32
+      List<BluetoothService> services = await widget.dispositivo.discoverServices();
+      BluetoothCharacteristic? wifiCharacteristic;
+
+      // 2. Procura a característica específica para enviar os dados
+      for (var service in services) {
+        if (service.uuid.toString() == _serviceUuid) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.toString() == _characteristicUuid) {
+              wifiCharacteristic = characteristic;
+              break;
+            }
+          }
+        }
+      }
+
+      if (wifiCharacteristic != null) {
+        // 3. Monta os dados (aqui estou usando JSON, mas pode ser uma string separada por vírgula)
+        String dadosWifi = "$ssid,$senha";
+        
+        // 4. Escreve na característica do ESP32
+        await wifiCharacteristic.write(utf8.encode(dadosWifi));
+
+        // 5. Salva no app que o medidor físico foi vinculado
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('medidor_adicionado', true);
+        await prefs.setBool('modo_simulador_ativo', false); // Desativa o simulador
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Credenciais enviadas! Dispositivo vinculado.'), backgroundColor: Colors.green),
+          );
+          // Desconecta do Bluetooth (o ESP32 vai usar o Wi-Fi agora)
+          await widget.dispositivo.disconnect();
+          
+          // Retorna 'true' para a tela anterior para fechar e atualizar o Dashboard
+          Navigator.pop(context, true); 
+        }
+      } else {
+        throw Exception("Serviço ou característica não encontrada no ESP32.");
+      }
+    } catch (e) {
+      debugPrint("Erro ao enviar dados: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao enviar credenciais: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.dispositivo.disconnect(); // Garante que desconecte ao sair da tela
+    _ssidController.dispose();
+    _senhaController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Configurar ${widget.dispositivo.platformName}')),
+      body: _conectando
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Estabelecendo conexão Bluetooth...'),
+                ],
+              ),
+            )
+          : Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.wifi, size: 80, color: Colors.cyan),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Conecte o medidor à rede Wi-Fi',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 32),
+                  TextField(
+                    controller: _ssidController,
+                    decoration: const InputDecoration(
+                      labelText: 'Nome da Rede (SSID)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.router),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _senhaController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Senha da Rede',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.lock),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  _enviando
+                      ? const CircularProgressIndicator()
+                      : SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.cyan.shade700,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: _enviarCredenciais,
+                            child: const Text('ENVIAR PARA O MEDIDOR', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                ],
+              ),
+            ),
     );
   }
 }
