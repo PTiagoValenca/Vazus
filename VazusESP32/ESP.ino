@@ -2,15 +2,17 @@
 #include <WebServer.h>
 #include <HTTPClient.h> 
 #include <WiFiClientSecure.h> 
-#include <BLEDevice.h>    
-#include <BLEServer.h>    
+#include <BLEDevice.h>      
+#include <BLEServer.h>      
 #include <Preferences.h> 
 
 // 🔴 SUA URL DO FIREBASE (Mantenha a barra "/" no final)
 const String firebaseURL = "https://vazus-504c6-default-rtdb.firebaseio.com/";
 
-#define SERVICE_UUID        "4faac601-1b4a-11e7-b060-0002a5d5c51b"
-#define CHARACTERISTIC_UUID "bea5a097-1b4a-11e7-b060-0002a5d5c51b"
+// 🔑 UUIDs CORRIGIDOS PARA BATER EXATAMENTE COM O SEU APP FLUTTER
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
 BLECharacteristic *pCharacteristic;
 bool dadosWifiRecebidos = false;
 String wifiSSID = "";
@@ -42,10 +44,11 @@ class BLECallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
       String rxValue = pCharacteristic->getValue().c_str();
       if (rxValue.length() > 0) {
-        int virgulaIndex = rxValue.indexOf(',');
-        if (virgulaIndex != -1) {
-          wifiSSID = rxValue.substring(0, virgulaIndex);
-          wifiPASS = rxValue.substring(virgulaIndex + 1);
+        // ✨ CORRIGIDO: O app Flutter envia os dados separados por ';' e não por ','
+        int divisorIndex = rxValue.indexOf(';');
+        if (divisorIndex != -1) {
+          wifiSSID = rxValue.substring(0, divisorIndex);
+          wifiPASS = rxValue.substring(divisorIndex + 1);
           
           preferences.begin("wifi-config", false);
           preferences.putString("ssid", wifiSSID);
@@ -107,7 +110,8 @@ void iniciarBluetoothCadastro() {
   
   digitalWrite(pinoLedInterno, HIGH);
 
-  BLEDevice::init("Cadastrar_Medidor_ESP32");
+  // 🌐 NOME CORRIGIDO: Agora o Flutter vai listar o dispositivo na busca Bluetooth automaticamente
+  BLEDevice::init("ESP32_Medidor_Vazao");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
   pCharacteristic = pService->createCharacteristic(
@@ -150,7 +154,6 @@ void setup() {
   
   digitalWrite(pinoLedInterno, LOW);
   
-  // ◄ Linha corrigida de forma limpa abaixo:
   attachInterrupt(digitalPinToInterrupt(pinoSensor), contarPulsos, FALLING);
   
   preferences.begin("wifi-config", true);
